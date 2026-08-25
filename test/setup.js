@@ -1,18 +1,28 @@
-import { vi } from 'vitest';
+import { vi, expect, afterAll, afterEach, beforeAll } from 'vitest';
+import { cleanup } from '@testing-library/react';
+import '@testing-library/jest-dom';
 
 /**
  * EXTERNAL DEPENDENCY MOCKS DOCUMENTATION
- * 
- * 1. MongoDB (@/lib/mongodb): 
- *    Database connections are mocked to prevent actual I/O during integration tests. 
- *    We expose `mockCollections` so individual tests can configure `.mockResolvedValue()` 
+ *
+ * 1. MongoDB (@/lib/mongodb):
+ *    Database connections are mocked to prevent actual I/O during integration tests.
+ *    We expose `mockCollections` so individual tests can configure `.mockResolvedValue()`
  *    for specific DB states.
- * 
+ *
  * 2. Soroban Indexer (@/lib/indexer):
- *    The blockchain state is mocked via `mockIndexer`. We simulate the on-chain 
- *    entitlement status (not_purchased, pending, available) to verify the API's response 
+ *    The blockchain state is mocked via `mockIndexer`. We simulate the on-chain
+ *    entitlement status (not_purchased, pending, available) to verify the API's response
  *    without running a local Soroban node.
+ *
+ * 3. React Testing Library:
+ *    Cleanup is performed after each test to ensure no state leaks between tests.
  */
+
+// Clean up React Testing Library after each test
+afterEach(() => {
+  cleanup();
+});
 
 // --- 1. MongoDB Mock ---
 export const mockCollections = {

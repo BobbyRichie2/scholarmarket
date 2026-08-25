@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "fix/issue-28-upgrade-access-control",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "fix/issue-28-upgrade-access-control": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "fix/issue-28-upgrade-access-control",
+    "origin"
+  ]
+}

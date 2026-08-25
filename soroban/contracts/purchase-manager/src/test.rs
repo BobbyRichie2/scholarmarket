@@ -2392,3 +2392,355 @@ fn dispute_release_to_creator_keeps_entitlement_active() {
     let settlement = client.get_settlement(&purchase_id).unwrap();
     assert_eq!(settlement.state, SettlementState::Released);
 }
+
+// ============== Pause/Unpause Mechanism Tests (Issue #26) ==============
+
+#[test]
+fn pause_prevents_new_purchases() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 1);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    // Contract is initially not paused
+    let config = client.get_platform_config().unwrap();
+    assert!(!config.paused);
+
+    // Pause the contract
+    client.pause(&admin);
+
+    // Verify contract is paused
+    let config_after = client.get_platform_config().unwrap();
+    assert!(config_after.paused);
+
+    // Attempt to purchase should fail
+    let result = client.try_purchase(&buyer, &material_id, &asset, &1_000_000, &sample_transaction_id(&env));
+    assert_eq!(result, Err(Ok(PurchaseError::ContractPaused)));
+}
+
+#[test]
+fn unpause_allows_purchases_again() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 1);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    // Pause the contract
+    client.pause(&admin);
+
+    // Unpause the contract
+    client.unpause(&admin);
+
+    // Verify contract is not paused
+    let config = client.get_platform_config().unwrap();
+    assert!(!config.paused);
+
+    // Purchase should now succeed
+    let result = client.try_purchase(&buyer, &material_id, &asset, &1_000_000, &sample_transaction_id(&env));
+    assert!(result.is_ok());
+}
+
+#[test]
+fn only_admin_can_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    // Non-admin should not be able to pause
+    let result = client.try_pause(&non_admin);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+}
+
+#[test]
+fn only_admin_can_unpause() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let registry = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+
+    // Pause contract as admin
+    client.pause(&admin);
+
+    // Non-admin should not be able to unpause
+    let result = client.try_unpause(&non_admin);
+    assert_eq!(result, Err(Ok(PurchaseError::NotAuthorized)));
+
+    // Contract should still be paused
+    let config = client.get_platform_config().unwrap();
+    assert!(config.paused);
+}
+
+#[test]
+fn read_only_functions_work_when_paused() {
+    let env = Env::default();
+    let (_contract_id, client, _buyer, _creator, _asset, _material_id, purchase_id) = setup_purchase(&env);
+
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+
+    // Pause contract
+    client.pause(&admin);
+
+    // Read-only functions should still work
+    let config = client.get_platform_config();
+    assert!(config.is_some());
+
+    let settlement = client.get_settlement(&purchase_id);
+    assert!(settlement.is_some());
+
+    let escrow = client.get_escrow_record(&purchase_id);
+    assert!(escrow.is_some());
+}
+
+// ============== Comprehensive Events Tests (Issue #27) ==============
+
+#[test]
+fn purchase_completed_event_emitted_with_correct_data() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 1);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (contract_id, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let transaction_id = sample_transaction_id(&env);
+    let purchase_id = client.purchase(&buyer, &material_id, &asset, &1_000_000, &transaction_id);
+
+    let events = env.events().all();
+    assert!(!events.is_empty());
+
+    // Verify that PurchaseCompletedEvent was emitted
+    let mut found_purchase_event = false;
+    for event in &events {
+        if let Ok(e) = PurchaseCompletedEvent::from_xdr(env, &event.data) {
+            found_purchase_event = true;
+            assert_eq!(e.purchase_id, purchase_id);
+            assert_eq!(e.material_id, material_id);
+            assert_eq!(e.buyer, buyer);
+            assert_eq!(e.seller, creator);
+            assert_eq!(e.asset, asset);
+            assert_eq!(e.amount, 1_000_000);
+            assert_eq!(e.transaction_id, transaction_id);
+            break;
+        }
+    }
+    assert!(found_purchase_event, "PurchaseCompletedEvent not found in emitted events");
+}
+
+#[test]
+fn payout_distributed_events_emitted_for_platform_fee() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let registry = env.register(MockRegistry, ());
+    let treasury = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let creator = Address::generate(&env);
+    let asset = env.register(MockAsset, ());
+
+    let material_id = bytes32(&env, 1);
+    let material = MaterialRecord {
+        material_id: material_id.clone(),
+        creator: creator.clone(),
+        paused: false,
+        status: MaterialStatus::Active,
+        quotes: vec![
+            &env,
+            AssetQuote {
+                asset: asset.clone(),
+                amount: 1_000_000,
+            },
+        ],
+        payout_shares: vec![
+            &env,
+            PayoutShare {
+                recipient: creator.clone(),
+                share_bps: 10_000,
+            },
+        ],
+    };
+
+    let registry_client = MockRegistryClient::new(&env, &registry);
+    registry_client.set_material(&material_id, &material);
+
+    let (_, client) = install_and_init_contract(&env, &admin, &registry, &treasury, 500);
+    client.set_asset_allowed(&admin, &asset, &AssetKind::Token, &true);
+
+    let _purchase_id = client.purchase(&buyer, &material_id, &asset, &1_000_000, &sample_transaction_id(&env));
+
+    let events = env.events().all();
+    assert!(!events.is_empty());
+
+    // Verify that PayoutDistributedEvent was emitted for platform fee
+    let mut found_payout_event = false;
+    for event in &events {
+        if let Ok(e) = PayoutDistributedEvent::from_xdr(&env, &event.data) {
+            if e.role.to_string(&env).unwrap() == Symbol::new(&env, "platform_fee").to_string(&env).unwrap() {
+                found_payout_event = true;
+                assert_eq!(e.recipient, treasury);
+                assert_eq!(e.asset, asset);
+                // Platform fee should be 500 BPS of 1,000,000 = 5,000
+                assert_eq!(e.amount, 5_000);
+                break;
+            }
+        }
+    }
+    assert!(found_payout_event, "PayoutDistributedEvent for platform_fee not found");
+}
+
+#[test]
+fn escrow_created_event_emitted_with_lock_period() {
+    let env = Env::default();
+    let (_contract_id, _client, _buyer, _creator, _asset, _material_id, _purchase_id) = setup_purchase(&env);
+
+    let events = env.events().all();
+    assert!(!events.is_empty());
+
+    // Verify that EscrowCreatedEvent was emitted
+    let mut found_escrow_event = false;
+    for event in &events {
+        if let Ok(e) = EscrowCreatedEvent::from_xdr(&env, &event.data) {
+            found_escrow_event = true;
+            assert!(e.lock_until_ledger > 0);
+            break;
+        }
+    }
+    assert!(found_escrow_event, "EscrowCreatedEvent not found");
+}
+
+#[test]
+fn entitlement_revoked_event_emitted_on_refund() {
+    let env = Env::default();
+    let (contract_id, client, admin, buyer, _creator, asset, material_id, purchase_id) =
+        setup_refund_scenario(&env);
+
+    let _asset_client = MockAssetClient::new(&env, &asset);
+
+    // Refund the purchase
+    client.process_refund(&admin, &purchase_id, &buyer);
+
+    let events = env.events().all();
+    assert!(!events.is_empty());
+
+    // Verify that PurchaseRefundedEvent was emitted (indicates entitlement revoked)
+    let mut found_refund_event = false;
+    for event in &events {
+        if let Ok(e) = PurchaseRefundedEvent::from_xdr(&env, &event.data) {
+            found_refund_event = true;
+            assert_eq!(e.purchase_id, purchase_id);
+            assert_eq!(e.buyer, buyer);
+            assert!(e.entitlement_revoked);
+            break;
+        }
+    }
+    assert!(found_refund_event, "PurchaseRefundedEvent with entitlement_revoked not found");
+}

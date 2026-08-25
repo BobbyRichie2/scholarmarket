@@ -1047,3 +1047,180 @@ fn extend_asset_policy_ttl_is_cursor_based() {
         env.as_contract(&contract_id, || env.storage().persistent().get_ttl(&asset_a_key));
     assert_ttl_renewed_to_max(renewed_ttl);
 }
+
+// ============== Comprehensive Events Tests (Issue #27) ==============
+
+#[test]
+fn material_registered_event_emitted_with_correct_data() {
+    let env = Env::default();
+    let (_contract_id, client) = install_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let metadata_uri_str = metadata_uri(&env);
+    let metadata_hash = bytes32(&env, 1);
+    let rights_hash = bytes32(&env, 2);
+    let quotes = default_quotes(&env);
+    let payout_shares = default_payout_shares(&env);
+
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri_str,
+        &metadata_hash,
+        &rights_hash,
+        &quotes,
+        &payout_shares,
+    );
+
+    let events = env.events().all();
+    assert!(!events.is_empty());
+
+    // Verify that MaterialRegisteredEvent was emitted with correct data
+    let mut found_event = false;
+    for event in &events {
+        if let Ok(e) = MaterialRegisteredEvent::from_xdr(&env, &event.data) {
+            found_event = true;
+            assert_eq!(e.material_id, material_id);
+            assert_eq!(e.creator, creator);
+            assert_eq!(e.metadata_uri, metadata_uri_str);
+            assert_eq!(e.metadata_hash, metadata_hash);
+            assert_eq!(e.rights_hash, rights_hash);
+            assert_eq!(e.status, MaterialStatus::Active);
+            break;
+        }
+    }
+    assert!(found_event, "MaterialRegisteredEvent not found in emitted events");
+}
+
+#[test]
+fn material_status_updated_event_emitted() {
+    let env = Env::default();
+    let (_contract_id, client) = install_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env),
+        &default_payout_shares(&env),
+    );
+
+    // Clear previous events
+    env.events().clear();
+
+    // Update material status to Archived
+    client.set_material_status(&creator, &material_id, &MaterialStatus::Archived);
+
+    let events = env.events().all();
+    assert!(!events.is_empty());
+
+    // Verify that MaterialStatusUpdatedEvent was emitted
+    let mut found_event = false;
+    for event in &events {
+        if let Ok(e) = MaterialStatusUpdatedEvent::from_xdr(&env, &event.data) {
+            found_event = true;
+            assert_eq!(e.material_id, material_id);
+            assert_eq!(e.creator, creator);
+            assert_eq!(e.status, MaterialStatus::Archived);
+            break;
+        }
+    }
+    assert!(found_event, "MaterialStatusUpdatedEvent not found");
+}
+
+#[test]
+fn material_sale_terms_updated_event_emitted() {
+    let env = Env::default();
+    let (_contract_id, client) = install_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env),
+        &default_payout_shares(&env),
+    );
+
+    // Clear previous events
+    env.events().clear();
+
+    let new_quotes = vec![
+        &env,
+        AssetQuote {
+            asset: Address::generate(&env),
+            amount: 500_000,
+        },
+    ];
+    let new_payout_shares = vec![
+        &env,
+        PayoutShare {
+            recipient: creator.clone(),
+            share_bps: 10_000,
+        },
+    ];
+
+    // Update sale terms
+    client.update_sale_terms(&material_id, &new_quotes, &new_payout_shares);
+
+    let events = env.events().all();
+    assert!(!events.is_empty());
+
+    // Verify that MaterialSaleTermsUpdatedEvent was emitted
+    let mut found_event = false;
+    for event in &events {
+        if let Ok(e) = MaterialSaleTermsUpdatedEvent::from_xdr(&env, &event.data) {
+            found_event = true;
+            assert_eq!(e.material_id, material_id);
+            assert_eq!(e.creator, creator);
+            break;
+        }
+    }
+    assert!(found_event, "MaterialSaleTermsUpdatedEvent not found");
+}
+
+#[test]
+fn asset_policy_updated_event_emitted() {
+    let env = Env::default();
+    let (_contract_id, client) = install_contract(&env);
+    env.mock_all_auths();
+
+    let creator = Address::generate(&env);
+    let _material_id = client.register_material(
+        &creator,
+        &metadata_uri(&env),
+        &bytes32(&env, 1),
+        &bytes32(&env, 2),
+        &default_quotes(&env),
+        &default_payout_shares(&env),
+    );
+
+    // Clear previous events
+    env.events().clear();
+
+    let asset = Address::generate(&env);
+
+    // Add asset to allowlist
+    client.set_asset_allowed(&creator, &asset, &AssetKind::Token, &true);
+
+    let events = env.events().all();
+    assert!(!events.is_empty());
+
+    // Verify that AssetPolicyUpdatedEvent was emitted
+    let mut found_event = false;
+    for event in &events {
+        if let Ok(e) = AssetPolicyUpdatedEvent::from_xdr(&env, &event.data) {
+            found_event = true;
+            assert_eq!(e.asset, asset);
+            assert_eq!(e.kind, AssetKind::Token);
+            assert!(e.enabled);
+            break;
+        }
+    }
+    assert!(found_event, "AssetPolicyUpdatedEvent not found");
+}

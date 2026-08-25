@@ -25,6 +25,7 @@ import {
 } from 'react-icons/fa';
 import { motion, AnimatePresence } from 'framer-motion';
 import Navbar from '@/components/Navbar';
+import Pagination from '@/components/ui/Pagination';
 import { useMarketplaceMaterials } from '@/hooks/api/useMaterials';
 import { useCart } from '@/hooks/useCart';
 import { useComparison } from '@/hooks/useComparison';
@@ -41,6 +42,7 @@ export default function CreatorProfilePage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSubject, setSelectedSubject] = useState('All');
   const [sortBy, setSortBy] = useState('Popular');
+  const [currentPage, setCurrentPage] = useState(1);
   const [isEditing, setIsEditing] = useState(false);
   const [editProfile, setEditProfile] = useState({});
   const [isUpdating, setIsUpdating] = useState(false);
@@ -154,39 +156,27 @@ export default function CreatorProfilePage() {
     }
   };
 
-  // Fetch materials for materials catalog
-  // We fetch page size 50 to allow rich client-side search/filters on their catalog
+  const materialPageSize = 10;
   const { data: materialsData, isLoading: materialsLoading } = useMarketplaceMaterials({
-    pageSize: 50,
+    creator: address,
+    page: currentPage,
+    pageSize: materialPageSize,
+    search: searchQuery || undefined,
+    subject: selectedSubject !== 'All' ? selectedSubject : undefined,
+    sortBy:
+      sortBy === 'Highest Rated'
+        ? 'rating_desc'
+        : sortBy === 'Price: Low to High'
+          ? 'price_asc'
+          : sortBy === 'Price: High to Low'
+            ? 'price_desc'
+            : 'popular',
   });
 
-  // Client-side filter materials uploaded by this creator address
-  const creatorMaterials = (materialsData?.items || []).filter((item) => {
-    // Check if the material belongs to this creator
-    const itemAddress = item.userAddress || item.ownerAddress;
-    return (
-      (itemAddress && itemAddress.toLowerCase() === address.toLowerCase()) ||
-      (item.author && item.author.toLowerCase() === creatorProfile.fullName.toLowerCase())
-    );
-  });
-
-  // Apply filters/sorting
-  const filteredMaterials = creatorMaterials
-    .filter((item) => {
-      const matchesSearch =
-        item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.description.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesSubject = selectedSubject === 'All' || item.subject === selectedSubject;
-      return matchesSearch && matchesSubject;
-    })
-    .sort((a, b) => {
-      if (sortBy === 'Price: Low to High') return Number(a.price) - Number(b.price);
-      if (sortBy === 'Price: High to Low') return Number(b.price) - Number(a.price);
-      if (sortBy === 'Highest Rated') return Number(b.rating || 4.8) - Number(a.rating || 4.8);
-      return Number(b.likes || 0) - Number(a.likes || 0); // Popular
-    });
-
-  const materialCount = filteredMaterials.length;
+  const creatorMaterials = materialsData?.items || [];
+  const filteredMaterials = creatorMaterials;
+  const materialCount = materialsData?.total || creatorMaterials.length;
+  const totalPages = Math.max(1, materialsData?.totalPages || 1);
 
   const [subjects, setSubjects] = useState(['All']);
   const [subjectsLoading, setSubjectsLoading] = useState(true);
@@ -358,7 +348,7 @@ export default function CreatorProfilePage() {
         {/* Creator Stats Summary */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
           {[
-            { label: 'Published', value: creatorMaterials.length, suffix: 'resources', color: 'blue' },
+            { label: 'Published', value: materialCount, suffix: 'resources', color: 'blue' },
             { label: 'Avg Rating', value: creatorMaterials.length > 0 ? (creatorMaterials.reduce((sum, m) => sum + Number(m.rating || 4.8), 0) / creatorMaterials.length).toFixed(1) : '—', suffix: '/ 5.0', color: 'amber' },
             { label: 'Total Likes', value: creatorMaterials.reduce((sum, m) => sum + Number(m.likes || 0), 0), suffix: 'likes', color: 'rose' },
             { label: 'Profile', value: `${completenessPercentage}%`, suffix: 'complete', color: 'green' },
@@ -393,9 +383,9 @@ export default function CreatorProfilePage() {
               >
                 {tab.icon}
                 {tab.label}
-                {tab.id === 'uploads' && creatorMaterials.length > 0 && (
+                {tab.id === 'uploads' && materialCount > 0 && (
                   <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950/80 text-blue-700 dark:text-blue-400">
-                    {creatorMaterials.length}
+                    {materialCount}
                   </span>
                 )}
               </button>
@@ -425,7 +415,10 @@ export default function CreatorProfilePage() {
                       placeholder="Search this creator's catalog..."
                       aria-label="Search this creator's catalog"
                       value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onChange={(e) => {
+                        setSearchQuery(e.target.value);
+                        setCurrentPage(1);
+                      }}
                       className="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/50 dark:focus:ring-blue-450 focus:bg-white text-slate-800 dark:text-slate-100 font-medium"
                     />
                   </div>
@@ -437,7 +430,10 @@ export default function CreatorProfilePage() {
                       <FaFilter className="text-slate-400 mr-2 text-[10px]" />
                       <select
                         value={selectedSubject}
-                        onChange={(e) => setSelectedSubject(e.target.value)}
+                        onChange={(e) => {
+                          setSelectedSubject(e.target.value);
+                          setCurrentPage(1);
+                        }}
                         disabled={subjectsLoading}
                         aria-label="Filter by subject"
                         className={`bg-transparent text-xs font-semibold text-slate-650 dark:text-slate-350 focus:outline-none cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-500 ${subjectsLoading ? 'opacity-50' : ''}`}
@@ -460,7 +456,10 @@ export default function CreatorProfilePage() {
                       <span className="text-slate-400 text-xs font-semibold mr-1.5">Sort:</span>
                       <select
                         value={sortBy}
-                        onChange={(e) => setSortBy(e.target.value)}
+                        onChange={(e) => {
+                          setSortBy(e.target.value);
+                          setCurrentPage(1);
+                        }}
                         aria-label="Sort materials"
                         className="bg-transparent text-xs font-bold text-slate-700 dark:text-slate-200 focus:outline-none cursor-pointer focus-visible:ring-2 focus-visible:ring-blue-500"
                       >
@@ -493,8 +492,9 @@ export default function CreatorProfilePage() {
                     </p>
                   </div>
                 ) : (
-                  <div role="list" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                    {filteredMaterials.map((material) => {
+                  <>
+                    <div role="list" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                      {filteredMaterials.map((material) => {
                       const materialId = material._id || material.id;
                       const isAlreadyInCart = cartItems.some((item) => (item._id || item.id) === materialId);
                       const isAlreadyInComp = comparedItems.some((item) => (item._id || item.id) === materialId);
@@ -593,8 +593,16 @@ export default function CreatorProfilePage() {
                           </div>
                         </article>
                       );
-                    })}
-                  </div>
+                      })}
+                    </div>
+                    {totalPages > 1 && (
+                      <Pagination
+                        page={currentPage}
+                        totalPages={totalPages}
+                        onPageChange={(page) => setCurrentPage(page)}
+                      />
+                    )}
+                  </>
                 )}
               </motion.div>
             )}

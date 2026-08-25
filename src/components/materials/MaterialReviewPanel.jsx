@@ -1,9 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { FaCheckCircle, FaRegStar, FaShieldAlt, FaStar } from "react-icons/fa";
+import { useEffect, useMemo, useState } from "react";
+import { FaCheckCircle, FaShieldAlt } from "react-icons/fa";
 import { useMaterialFeedback, useSubmitMaterialFeedback } from "@/hooks/api/useMaterials";
 import { formatAddress } from "@/utils/formatAddress";
+import StarRating from "@/components/ui/StarRating";
+import PrimaryButton from "@/components/ui/PrimaryButton";
+import Pagination from "@/components/ui/Pagination";
 
 const MIN_COMMENT_LENGTH = 12;
 const MAX_COMMENT_LENGTH = 600;
@@ -26,13 +29,17 @@ function normalizeReview(review, index) {
   };
 }
 
-function getReviewGateState({ currentAddress, isCreator, isSubmitting }) {
+function getReviewGateState({ currentAddress, isCreator, isSubmitting, hasEntitlement }) {
   if (!currentAddress) {
     return { canSubmit: false, status: "wallet-missing" };
   }
 
   if (isCreator) {
     return { canSubmit: false, status: "creator" };
+  }
+
+  if (!hasEntitlement) {
+    return { canSubmit: false, status: "missing-entitlement" };
   }
 
   if (isSubmitting) {
@@ -42,39 +49,11 @@ function getReviewGateState({ currentAddress, isCreator, isSubmitting }) {
   return { canSubmit: true, status: "ready" };
 }
 
-function RatingStars({ value, onChange, disabled = false, describedBy }) {
-  return (
-    <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-describedby={describedBy}>
-      {[1, 2, 3, 4, 5].map((star) => {
-        const selected = value === star;
-        const filled = star <= value;
-        return (
-          <button
-            key={star}
-            type="button"
-            role="radio"
-            aria-checked={selected}
-            aria-label={`${star} star${star === 1 ? "" : "s"}`}
-            disabled={disabled}
-            onClick={() => onChange(star)}
-            className="min-h-11 min-w-11 rounded-full border border-amber-100 bg-amber-50 text-xl text-amber-500 transition hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-300 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {filled ? <FaStar className="mx-auto" /> : <FaRegStar className="mx-auto" />}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function SummaryStars({ rating }) {
   const normalizedRating = Number(rating) || 0;
-  const rounded = Math.round(normalizedRating);
   return (
     <div className="flex items-center gap-1 text-amber-500" aria-label={`${normalizedRating.toFixed(1)} out of 5 stars`}>
-      {[1, 2, 3, 4, 5].map((star) => (
-        <FaStar key={star} className={star <= rounded ? "opacity-100" : "opacity-25"} />
-      ))}
+      <StarRating value={Math.round(normalizedRating)} readOnly size="sm" />
     </div>
   );
 }
@@ -83,6 +62,7 @@ function FeedbackGateNotice({ state }) {
   const messages = {
     "wallet-missing": "Connect a wallet to leave feedback for this resource.",
     creator: "Creators cannot score their own resource.",
+    "missing-entitlement": "Purchase and access this material to leave a review.",
     submitting: "Publishing your feedback now.",
     ready: "Your feedback helps learners discover the right material faster.",
   };
@@ -116,23 +96,37 @@ export function MaterialReviewPanelView({
   isSubmitting = false,
   currentAddress,
   creatorAddress,
+  entitlement,
 }) {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState("");
   const [errors, setErrors] = useState({});
   const [successMessage, setSuccessMessage] = useState("");
+  const [reviewPage, setReviewPage] = useState(1);
 
   const reviews = useMemo(() => {
     const source = Array.isArray(feedbackData?.items) ? feedbackData.items : initialReviews;
     return source.map(normalizeReview);
   }, [feedbackData?.items, initialReviews]);
 
+  const hasEntitlement = entitlement === undefined
+    ? true
+    : Boolean(entitlement?.data?.hasAccess || entitlement?.hasAccess || entitlement?.data?.owned || entitlement?.owned);
   const isCreator = normalizeAddress(currentAddress) && normalizeAddress(currentAddress) === normalizeAddress(creatorAddress);
-  const gateState = getReviewGateState({ currentAddress, isCreator, isSubmitting });
+  const gateState = getReviewGateState({ currentAddress, isCreator, isSubmitting, hasEntitlement });
   const averageRating = Number(feedbackData?.averageScore) || (
     reviews.length === 0 ? 0 : reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length
   );
   const feedbackCount = Number(feedbackData?.feedbackCount ?? reviews.length) || 0;
+  const reviewPageSize = 5;
+  const totalReviewPages = Math.max(1, Math.ceil(reviews.length / reviewPageSize));
+  const paginatedReviews = reviews.slice((reviewPage - 1) * reviewPageSize, reviewPage * reviewPageSize);
+
+  useEffect(() => {
+    if (reviewPage > totalReviewPages) {
+      setReviewPage(totalReviewPages);
+    }
+  }, [reviewPage, totalReviewPages]);
 
   function validate() {
     const nextErrors = {};
@@ -205,15 +199,17 @@ export function MaterialReviewPanelView({
 
             <div>
               <label className="mb-3 block text-sm font-semibold text-slate-800">Score</label>
-              <RatingStars
-                value={rating}
-                onChange={(nextRating) => {
-                  setRating(nextRating);
-                  setErrors((current) => ({ ...current, rating: undefined, form: undefined }));
-                }}
-                disabled={!gateState.canSubmit}
-                describedBy={errors.rating ? "feedback-rating-error" : undefined}
-              />
+              <div className="rounded-2xl border border-slate-200 bg-amber-50/40 p-3" aria-describedby={errors.rating ? "feedback-rating-error" : undefined}>
+                <StarRating
+                  value={rating}
+                  onChange={(nextRating) => {
+                    setRating(nextRating);
+                    setErrors((current) => ({ ...current, rating: undefined, form: undefined }));
+                  }}
+                  disabled={!gateState.canSubmit}
+                  className="gap-2"
+                />
+              </div>
               {errors.rating && (
                 <p id="feedback-rating-error" role="alert" className="mt-2 text-sm text-red-600">
                   {errors.rating}
@@ -254,13 +250,13 @@ export function MaterialReviewPanelView({
               </div>
             </div>
 
-            <button
+            <PrimaryButton
               type="submit"
               disabled={!gateState.canSubmit}
-              className="min-h-11 w-full rounded-2xl bg-slate-950 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-400 disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="w-full"
             >
               {isSubmitting ? "Publishing feedback..." : "Publish feedback"}
-            </button>
+            </PrimaryButton>
             {successMessage && (
               <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
                 {successMessage}
@@ -281,42 +277,51 @@ export function MaterialReviewPanelView({
               <p className="mt-2 text-sm text-slate-500">Learners can add the first score from this resource page.</p>
             </div>
           ) : (
-            <ol className="mt-5 space-y-5">
-              {reviews.map((review) => (
-                <li key={review.id} className="relative rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900">
-                        {review.reviewerName || formatAddress(review.reviewer, 8, 6) || "Anonymous"}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {new Date(review.createdAt).toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "numeric",
-                          year: "numeric",
-                        })}
-                      </p>
+            <>
+              <ol className="mt-5 space-y-5">
+                {paginatedReviews.map((review) => (
+                  <li key={review.id} className="relative rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-900">
+                          {review.reviewerName || formatAddress(review.reviewer, 8, 6) || "Anonymous"}
+                        </p>
+                        <p className="text-xs text-slate-500">
+                          {new Date(review.createdAt).toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                          })}
+                        </p>
+                      </div>
+                      <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                        <FaShieldAlt aria-hidden="true" />
+                        {review.moderationStatus === "pending_review" ? "Queued review" : "Moderated"}
+                      </span>
                     </div>
-                    <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                      <FaShieldAlt aria-hidden="true" />
-                      {review.moderationStatus === "pending_review" ? "Queued review" : "Moderated"}
-                    </span>
-                  </div>
-                  <div className="mt-3">
-                    <SummaryStars rating={review.rating} />
-                  </div>
-                  <p className="mt-3 overflow-wrap-anywhere break-words text-sm leading-6 text-slate-700">
-                    {review.comment}
-                  </p>
-                  {review.verifiedBuyer && (
-                    <span className="mt-4 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                      <FaCheckCircle aria-hidden="true" />
-                      Verified buyer
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ol>
+                    <div className="mt-3">
+                      <SummaryStars rating={review.rating} />
+                    </div>
+                    <p className="mt-3 overflow-wrap-anywhere break-words text-sm leading-6 text-slate-700">
+                      {review.comment}
+                    </p>
+                    {review.verifiedBuyer && (
+                      <span className="mt-4 inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                        <FaCheckCircle aria-hidden="true" />
+                        Verified buyer
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+              {reviews.length > reviewPageSize && (
+                <Pagination
+                  page={reviewPage}
+                  totalPages={totalReviewPages}
+                  onPageChange={setReviewPage}
+                />
+              )}
+            </>
           )}
         </div>
       </div>
